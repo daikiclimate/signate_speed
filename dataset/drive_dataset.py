@@ -1,4 +1,5 @@
 import math
+import h5py
 import os
 import random
 
@@ -10,6 +11,8 @@ from PIL import Image
 from pathlib import Path
 import json
 
+from .cv_assigner import StKFoldAssigner
+
 
 class DriveDataset(data.Dataset):
     def __init__(
@@ -17,13 +20,24 @@ class DriveDataset(data.Dataset):
         mode="train",
         config=None,
         transform=None,
+        use_hdf5=False,
+        cv_fold_num=0,
     ):
         src_path = Path("/home/ubuntu/data/signate_speed")
         self._annotation_path = src_path / "data/train_annotations"
         if mode == "test":
             self._annotation_path = src_path / "data/test_annotations"
         self._train_annotation_list = os.listdir(self._annotation_path)
-        count = 0
+        self._train_annotation_list = np.array(os.listdir(self._annotation_path))
+        if not mode == "test":
+            kfold_assigner = StKFoldAssigner("att", self._annotation_path)
+            train_list, val_list = kfold_assigner(
+                cv_fold_num, self._train_annotation_list
+            )
+            if mode == "train":
+                self._train_annotation_list = self._train_annotation_list[train_list]
+            elif mode == "val":
+                self._train_annotation_list = self._train_annotation_list[val_list]
 
         self._config = config
         self._mode = mode
@@ -31,13 +45,77 @@ class DriveDataset(data.Dataset):
         self._data_type = "time"
         self._pad = 300
         self._speed_limit = 120
+        self._use_hdf5 = use_hdf5
 
     def __getitem__(self, idx):
+        if self._use_hdf5:
+            if self._mode == "test":
+                return self.get_test_hdf5(idx)
+            else:
+                return self.get_hdf5(idx)
         if self._data_type == "img":
             return self.get_image(idx)
 
         elif self._data_type == "time":
             return self.get_time_feature(idx)
+
+    def get_hdf5(self, idx):
+        seq_index = self._train_annotation_list[idx]
+        seq_index = seq_index.split(".")[0]
+        f = h5py.File("data/hdf5_dataset.h5", "r")
+        sample = f["train"][seq_index]
+        img = sample["distance_image"]
+        target = sample["target"]
+        feature = sample["feature"]
+        att = sample["att"][0]
+
+        feature = torch.tensor(feature)
+        target = torch.tensor(target)
+
+        self._target_ratio = True
+        if self._target_ratio:
+            own_speed = feature[:, 0:1]
+            tgt_speed = target[:, 0:1]
+            tgt_ratio = tgt_speed / own_speed
+            target = torch.cat([target, tgt_ratio], 1)
+
+        self._target_future_own = True
+        # self._target_future_own = False
+        if self._target_future_own:
+            own_speed = feature[:, 0:1]
+            own_future_speed = feature[:, 0:1]
+            t = 5
+            _pad = torch.ones((5, 1))
+            _pad = _pad * torch.mean(own_future_speed)
+            n_seq = len(own_future_speed)
+            own_future_speed = torch.cat([own_future_speed, _pad])[t:]
+            target = torch.cat([target, own_future_speed], 1)
+
+        mask = torch.zeros([self._pad])
+        mask[: len(feature)] = 1
+        mask[:20] = 0
+        pad = torch.zeros([self._pad - len(feature), feature.shape[1]])
+        feature = torch.cat([feature, pad])
+        pad = torch.zeros(self._pad - len(target), target.shape[1])
+        target = torch.cat([target, pad])
+
+        return feature.float(), target.float(), mask.float(), att
+
+    def get_test_hdf5(self, idx):
+        seq_index = self._train_annotation_list[idx]
+        seq_index = seq_index.split(".")[0]
+        f = h5py.File("data/hdf5_dataset.h5", "r")
+        sample = f["test"][seq_index]
+        img = sample["distance_image"]
+        feature = sample["feature"]
+
+        feature = torch.tensor(feature)
+        mask = torch.zeros([self._pad])
+        mask[: len(feature)] = 1
+        mask[:20] = 0
+        pad = torch.zeros([self._pad - len(feature), feature.shape[1]])
+        feature = torch.cat([feature, pad])
+        return feature.float(), torch.tensor(0), mask.float(), seq_index
 
     def get_time_feature(self, idx):
         idx = 0
@@ -117,12 +195,15 @@ class DriveDataset(data.Dataset):
         train_path = Path(f"data/train_videos/{seq_index}/disparity")
         with open(anno_path) as f:
             anno = json.load(f)
-        att = anno["attributes"]
-        att = att["評価値計算時の重み付加"]
-        if att == "無":
-            att = 1
+        if self._mode == "test":
+            att = 0
         else:
-            att = 3
+            att = anno["attributes"]
+            att = att["評価値計算時の重み付加"]
+            if att == "無":
+                att = 1
+            else:
+                att = 3
         seq = anno["sequence"]
         inf_DP = seq[0]["inf_DP"]
         train_raw_list = sorted(os.listdir(train_path))

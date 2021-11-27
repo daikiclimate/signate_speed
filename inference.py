@@ -11,6 +11,7 @@ from dataset import return_data
 from models import build_model
 
 import json
+import tqdm
 
 
 def get_arg():
@@ -25,20 +26,30 @@ def main():
     config = get_arg()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_set = return_data.return_test_dataset(config)
-    model = build_model.build_model(config)
-    model = model.to(device)
-    model.load_state_dict(torch.load("weight/model.pth"))
-    model.eval()
+    # model = build_model.build_model(config)
+    # model = model.to(device)
+    # model.load_state_dict(torch.load("weight/model.pth"))
+    models = []
+    # for i in range(1):
+    for i in range(5):
+        model = build_model.build_model(config)
+        model = model.to(device)
+        model.load_state_dict(torch.load(f"weight/model_{i}.pth"))
+        model.eval()
+        models.append(model)
 
     labels = []
     preds = []
 
     with open("data/sample_submit.json") as f:
         sample_submit = json.load(f)
-    for data, _, mask, sub_id in test_set:
+    # for data, _, mask, sub_id in test_set:
+    for data, _, mask, sub_id in tqdm.tqdm(test_set):
         data = data.unsqueeze(0).to(device)
         with torch.no_grad():
-            output = model(data) * 120
+            # output = model(data) * 120
+            output = [m(data) * 120 for m in models]
+            output = torch.mean(torch.cat(output), 0).unsqueeze(0)
         mask[:20] = 1
 
         output = output[0, mask == 1].detach().cpu().numpy().tolist()

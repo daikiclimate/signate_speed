@@ -1,11 +1,15 @@
-device: "cuda:0"
+device: "cuda:1"
+# device: "cuda:0"
 save_folder : "./weight/"
 lr : 0.001
-epochs : 10
+epochs : 30
 n_worker: 8
-batch_size : 2
+batch_size : 64
+use_hdf5: True
 # batch_size : 64
 
 input_size: 3
 lstm_hidden: 64
-n_output: 2
+n_output: 4
+
+repeat: 10
