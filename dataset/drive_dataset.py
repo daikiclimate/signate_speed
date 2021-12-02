@@ -62,7 +62,9 @@ class DriveDataset(data.Dataset):
     def get_hdf5(self, idx):
         seq_index = self._train_annotation_list[idx]
         seq_index = seq_index.split(".")[0]
-        f = h5py.File("data/hdf5_dataset.h5", "r")
+        hdf_path = Path("/home/ubuntu/local/signate_speed/hdf5_dataset_v5.h5")
+        f = h5py.File(hdf_path, "r")
+        # f = h5py.File("data/hdf5_dataset.h5", "r")
         sample = f["train"][seq_index]
         img = sample["distance_image"]
         target = sample["target"]
@@ -70,13 +72,32 @@ class DriveDataset(data.Dataset):
         att = sample["att"][0]
 
         feature = torch.tensor(feature)
+        feature[:, 0] /= 100
+        feature[:, 1] /= 100
+        feature[:, 2] /= 100
+
+        self._feature_future = True
+        self._feature_future = False
+
+        if self._feature_future:
+            time_diff = 10
+            own_speed = feature[:, 0:1]
+            _pad = torch.ones((time_diff, 1))
+            _pad = _pad * own_speed[0]
+            pad_speed = torch.cat([_pad, own_speed])
+            r = torch.roll(pad_speed, time_diff, 0)[time_diff:]
+            diff = own_speed - r
+            feature = torch.cat([feature, diff], 1)
+
         target = torch.tensor(target)
+        target[:, 0] /= 100
+        target[:, 1] /= 100
 
         self._target_ratio = True
         if self._target_ratio:
             own_speed = feature[:, 0:1]
             tgt_speed = target[:, 0:1]
-            tgt_ratio = tgt_speed / own_speed
+            tgt_ratio = tgt_speed / torch.clamp(own_speed, 0.01)
             target = torch.cat([target, tgt_ratio], 1)
 
         self._target_future_own = True
@@ -84,12 +105,19 @@ class DriveDataset(data.Dataset):
         if self._target_future_own:
             own_speed = feature[:, 0:1]
             own_future_speed = feature[:, 0:1]
-            t = 5
-            _pad = torch.ones((5, 1))
+            t = 10
+            _pad = torch.ones((t, 1))
             _pad = _pad * torch.mean(own_future_speed)
             n_seq = len(own_future_speed)
             own_future_speed = torch.cat([own_future_speed, _pad])[t:]
             target = torch.cat([target, own_future_speed], 1)
+
+        self._target_diff = True
+        if self._target_diff:
+            own_speed = feature[:, 0:1]
+            tgt_speed = target[:, 0:1]
+            tgt_diff = own_speed - tgt_speed
+            target = torch.cat([target, tgt_diff], 1)
 
         mask = torch.zeros([self._pad])
         mask[: len(feature)] = 1
@@ -118,7 +146,7 @@ class DriveDataset(data.Dataset):
         return feature.float(), torch.tensor(0), mask.float(), seq_index
 
     def get_time_feature(self, idx):
-        idx = 0
+        # idx = 0
         seq_index = self._train_annotation_list[idx]
         anno_path = self._annotation_path / seq_index
         seq_index = seq_index.split(".")[0]
@@ -241,7 +269,6 @@ class DriveDataset(data.Dataset):
         # train_raw_list = sorted(os.listdir(train_path))
         # train_raw_image_path = train_raw_list[scene_index]
         # raw_image_path = train_path / train_raw_image_path
-        # print(raw_image_path)
         # img = Image.open(raw_image_path)
         # img = np.array(img, dtype = np.float32)
 
@@ -252,7 +279,6 @@ class DriveDataset(data.Dataset):
         img[img > self._distance_limit] = 0
         img = img / self._distance_limit
         return img
-        # print(seq[scene_index].keys())
         # dict_keys(['OwnSpeed', 'StrDeg', 'inf_DP', 'Distance_ref', 'TgtSpeed_ref', 'TgtXPos_LeftUp', 'TgtYPos_LeftUp', 'TgtWidth', 'TgtHeight'])
 
     def __len__(self):
