@@ -6,6 +6,7 @@ import glob
 import h5py
 import os
 import json
+from tracking import add_track_annotations
 
 
 src_path = "/home/ubuntu/data/signate_speed/data"
@@ -15,9 +16,11 @@ test_sequence_path = "/home/ubuntu/data/signate_speed/data/test_videos"
 test_annotation_path = "/home/ubuntu/data/signate_speed/data/test_annotations"
 
 h5_path = "./data/hdf5_dataset_v2.h5"
+h5_path = "./data/hdf5_dataset_v3.h5"
+h5_path = "./data/hdf5_dataset_v5.h5"
 
 
-def get_distance_image(raw_image_path, inf_DP, distance_limit=100):
+def get_distance_image(raw_image_path, inf_DP, distance_limit=150):
 
     with open(raw_image_path, "rb") as f:
         disparity_image = f.read()
@@ -32,8 +35,8 @@ def get_distance_image(raw_image_path, inf_DP, distance_limit=100):
 
     not_inf_index = img > inf_DP
     img[not_inf_index] = 560 / (img[not_inf_index] - inf_DP)
-    img[img > distance_limit] = 0
-    img = img / distance_limit
+    img[img > distance_limit] = -1
+    # img = img / distance_limit
     return img
 
 
@@ -55,10 +58,15 @@ if __name__ == "__main__":
         test_group = h5.create_group("test")
         for scene_index in tqdm.tqdm(sorted(os.listdir(test_sequence_path))):
             path = os.path.join(test_sequence_path, scene_index)
+
             subset_group = test_group.create_group(scene_index)
             anno_path = os.path.join(test_annotation_path, scene_index + ".json")
             with open(anno_path) as f:
                 anno = json.load(f)
+
+            video_path = f"data/test_videos/{scene_index}/Right.mp4"
+            tracking_bboxes = add_track_annotations(video_path, anno)
+
             seq = anno["sequence"]
             inf_DP = seq[0]["inf_DP"]
             test_path = Path(f"data/test_videos/{scene_index}/disparity")
@@ -83,22 +91,25 @@ if __name__ == "__main__":
             tgt_h = seq[0]["TgtHeight"]
             box = [tgt_x, tgt_y, tgt_w, tgt_h]
             x_center, y_center = get_box_info(box)
-            for s, img in zip(seq, images):
+            tracking_box_center = [get_box_info(i) for i in tracking_bboxes]
+
+            for s, img, tbox in zip(seq, images, tracking_box_center):
+                t_x_center, t_y_center = tbox
+                d_tracked = img[t_y_center, t_x_center]
                 d = img[y_center, x_center]
                 ownspeed = s["OwnSpeed"]
-                ownspeed /= speed_limit
+                # ownspeed /= speed_limit
                 strdeg = s["StrDeg"] / 10
                 inf_DP = s["inf_DP"]
-                feature.append([ownspeed, strdeg, d])
+                feature.append([ownspeed, strdeg, d, d_tracked])
 
             subset_group.create_dataset("feature", data=feature)
 
         train_group = h5.create_group("train")
         for scene_index in tqdm.tqdm(sorted(os.listdir(sequence_path))):
-            c += 1
-            if c == 10:
-                pass
-                # break
+            # c += 1
+            # if c == 10:
+            #     pass
             path = os.path.join(sequence_path, scene_index)
 
             subset_group = train_group.create_group(scene_index)
@@ -106,6 +117,10 @@ if __name__ == "__main__":
             anno_path = os.path.join(annotation_path, scene_index + ".json")
             with open(anno_path) as f:
                 anno = json.load(f)
+
+            video_path = f"data/train_videos/{scene_index}/Right.mp4"
+            tracking_bboxes = add_track_annotations(video_path, anno)
+
             att = anno["attributes"]
             att = att["評価値計算時の重み付加"]
             if att == "無":
@@ -136,18 +151,23 @@ if __name__ == "__main__":
             tgt_h = seq[0]["TgtHeight"]
             box = [tgt_x, tgt_y, tgt_w, tgt_h]
             x_center, y_center = get_box_info(box)
-            for s, img in zip(seq, images):
+            tracking_box_center = [get_box_info(i) for i in tracking_bboxes]
+
+            for s, img, tbox in zip(seq, images, tracking_box_center):
                 d = img[y_center, x_center]
+                t_x_center, t_y_center = tbox
+                d_tracked = img[t_y_center, t_x_center]
+
                 ownspeed = s["OwnSpeed"]
-                ownspeed /= speed_limit
+                # ownspeed /= speed_limit
                 strdeg = s["StrDeg"] / 10
                 inf_DP = s["inf_DP"]
-                feature.append([ownspeed, strdeg, d])
+                feature.append([ownspeed, strdeg, d, d_tracked])
 
                 tgt_distance_ref = s["Distance_ref"]
-                tgt_distance_ref /= distance_limit
+                # tgt_distance_ref /= distance_limit
                 tgt_speed_ref = s["TgtSpeed_ref"]
-                tgt_speed_ref /= speed_limit
+                # tgt_speed_ref /= speed_limit
 
                 tgt_x_leftup = s["TgtXPos_LeftUp"]
                 tgt_y_leftup = s["TgtYPos_LeftUp"]
